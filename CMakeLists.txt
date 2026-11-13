@@ -216,7 +216,7 @@ else()
         target_link_options(cloud_redirect PRIVATE -s)
     endif()
 
-    # CLI wrapper (32-bit loader for cloud_redirect.so)
+    # CLI wrapper (loads cloud_redirect.so; must match the .so's word size)
     add_executable(cloud_redirect_cli
         src/platform/linux/cli_main.cpp
     )
