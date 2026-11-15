@@ -12,10 +12,10 @@ name: Release Linux x86_64
 #
 # Assets: cloud_redirect-x86_64.so, cloud_redirect_cli-x86_64 and SHA256SUMS.
 # The installer (lumalinux's setup.sh) pins the .so by its sha256, so a release's
-# assets are built once: re-running by hand defaults to fixing the release text
-# only (a release created from the web before the workflow ran has none; GitHub
-# then shows the tagged commit's message in its place) and rebuilds only when
-# asked.
+# assets are built once: re-running by hand defaults to (re)writing the release
+# text only (title = tag, notes = the changelog line; a release created from the
+# web before the workflow ran has none, and GitHub shows the tagged commit's
+# message in its place) and rebuilds only when asked.
 on:
   push:
     tags: ['v*']
@@ -117,40 +117,28 @@ jobs:
 
       # Title and notes from the tag (v<version>-linux64.<build>), the commit and
       # the previous tag. A title or notes already written by hand are kept.
+      # Title = the tag, notes = the changelog line only (release notes live on
+      # Discord). A tag push fills them when empty; a manual run writes them.
       - name: Release title and notes
         env:
           GH_TOKEN: ${{ github.token }}
+          MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
-          ver="${TAG#v}"; ver="${ver%%-*}"
-          build="${TAG##*-linux64.}"; [ "$build" = "$TAG" ] && build=""
-          title="CloudRedirect ${ver} for the 64-bit Steam client (Linux x86_64${build:+, build $build})"
-          sha="$(git rev-parse --short=7 HEAD)"
           prev="$(git tag --list 'v*' | sort -V | grep -B1 -x "$TAG" | head -n 1)"
           if [ -n "$prev" ] && [ "$prev" != "$TAG" ]; then
-            changelog="**Full Changelog**: https://github.com/${{ github.repository }}/compare/${prev}...${TAG}"
+            notes="**Full Changelog**: https://github.com/${{ github.repository }}/compare/${prev}...${TAG}"
           else
-            changelog="**Full Changelog**: https://github.com/${{ github.repository }}/commits/${TAG}"
+            notes="**Full Changelog**: https://github.com/${{ github.repository }}/commits/${TAG}"
           fi
-          notes="$(printf '%s\n' \
-            "Linux build of CloudRedirect ${ver} for the 64-bit Steam client (steamrt64): upstream's Linux hooks ported to x86_64. Same program, same behaviour as the 32-bit build." \
-            "" \
-            "**Assets**" \
-            "- \`cloud_redirect-x86_64.so\` — the hook library. lumalinux's setup.sh (v0.22.8+) installs it at \`~/.local/share/CloudRedirect/x86_64/cloud_redirect.so\`, next to the 32-bit one; each Steam client loads the build of its class." \
-            "- \`cloud_redirect_cli-x86_64\` — the CLI wrapper, same word size as the .so." \
-            "- \`SHA256SUMS\`" \
-            "" \
-            "Built by CI from \`${{ github.repository }}\` @ ${sha} (Ubuntu 22.04, GCC 12; OpenSSL and curl linked in statically). Needs glibc 2.34+ and libstdc++ GLIBCXX_3.4.30+ (any current SteamOS)." \
-            "" \
-            "${changelog}")"
           if gh release view "$TAG" --json name,body >/tmp/rel.json 2>/dev/null; then
             cur_name="$(jq -r '.name // ""' /tmp/rel.json)"; cur_body="$(jq -r '.body // ""' /tmp/rel.json)"
-            args=()
-            [ -z "$cur_name" ] && args+=(--title "$title")
-            [ -z "$cur_body" ] && args+=(--notes "$notes")
-            if [ "${#args[@]}" -gt 0 ]; then gh release edit "$TAG" "${args[@]}"; echo "release text set (${#args[@]} field(s))"; else echo "release already has a title and notes; left as they are"; fi
+            if [ "$MANUAL" = "true" ] || [ -z "$cur_name" ] || [ -z "$cur_body" ]; then
+              gh release edit "$TAG" --title "$TAG" --notes "$notes"; echo "release text set"
+            else
+              echo "release already has a title and notes; left as they are"
+            fi
           else
-            gh release create "$TAG" --title "$title" --notes "$notes"
-            echo "release created"
+            gh release create "$TAG" --title "$TAG" --notes "$notes"; echo "release created"
           fi
 
       - name: Attach the assets
