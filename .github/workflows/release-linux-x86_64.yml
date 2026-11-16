@@ -1,6 +1,6 @@
 name: Release Linux x86_64
 
-# On a version tag, build cloud_redirect.so and cloud_redirect_cli for the 64-bit
+# On a version tag, build cloud_redirect.so for the 64-bit
 # Steam client (steamrt64), attach them to the GitHub release of that tag, and
 # give the release its title and notes.
 #
@@ -10,7 +10,9 @@ name: Release Linux x86_64
 # curl built from source and linked statically into the .so with their symbols
 # hidden, so the result depends only on libstdc++/libgcc/libc.
 #
-# Assets: cloud_redirect-x86_64.so, cloud_redirect_cli-x86_64 and SHA256SUMS.
+# Asset: cloud_redirect-x86_64.so, the only file setup.sh installs (the CLI the
+# sign-in app drives is the 32-bit one from the flatpak, and setup.sh pins nothing
+# by hash: no checksum file).
 # The installer (lumalinux's setup.sh) pins the .so by its sha256, so a release's
 # assets are built once: re-running by hand defaults to (re)writing the release
 # text only (title = tag, notes = the changelog line; a release created from the
@@ -26,7 +28,7 @@ on:
         type: string
         required: true
       rebuild:
-        description: "Rebuild and re-upload the assets (replaces them: the sha256 setup.sh pins may change). Off = only set the release title/notes"
+        description: "Rebuild and re-upload the .so (replaces it). Off = only set the release title/notes"
         type: boolean
         default: false
 
@@ -98,8 +100,8 @@ jobs:
             echo "== cloud_redirect x86_64 (CR_GIT_SHA=$CR_SHA)"
             rm -rf build64 && mkdir build64 && cd build64
             cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release -DLINUX_X86_64=ON -DDEPS64_PREFIX="$DEPS" -DCR_GIT_SHA="$CR_SHA" 2>&1 | grep -E "x86_64 build|Error|error" || true
-            ninja cloud_redirect cloud_redirect_cli 2>&1 | grep -v -E "^\[[0-9]+/[0-9]+\] " | tail -n 20
-            file cloud_redirect.so cloud_redirect_cli | sed "s/, BuildID.*//"
+            ninja cloud_redirect 2>&1 | grep -v -E "^\[[0-9]+/[0-9]+\] " | tail -n 20
+            file cloud_redirect.so | sed "s/, BuildID.*//"
             echo "NEEDED:"; readelf -d cloud_redirect.so | grep NEEDED | sed "s/^ */  /"
             echo "max GLIBC: $(strings cloud_redirect.so | grep -oE "GLIBC_2\.[0-9]+" | sort -t. -k2 -n -u | tail -n 1)  max GLIBCXX: $(strings cloud_redirect.so | grep -oE "GLIBCXX_3\.4\.[0-9]+" | sort -t. -k3 -n -u | tail -n 1)"
             if readelf -d cloud_redirect.so | grep -qE "libcurl|libssl|libcrypto"; then echo "::error::cloud_redirect.so links curl/OpenSSL dynamically (expected static, hidden)"; exit 1; fi
@@ -107,13 +109,12 @@ jobs:
             [ "$cls" = "2" ] || { echo "::error::cloud_redirect.so is not a 64-bit ELF (class $cls)"; exit 1; }'
           sudo chown -R "$(id -u):$(id -g)" .
 
-      - name: Stage the assets
+      - name: Stage the asset
         if: ${{ env.DO_BUILD == 'true' }}
         run: |
           mkdir -p out
           cp build64/cloud_redirect.so out/cloud_redirect-x86_64.so && chmod 644 out/cloud_redirect-x86_64.so
-          cp build64/cloud_redirect_cli out/cloud_redirect_cli-x86_64 && chmod 755 out/cloud_redirect_cli-x86_64
-          ( cd out && sha256sum cloud_redirect-x86_64.so cloud_redirect_cli-x86_64 > SHA256SUMS && cat SHA256SUMS )
+          sha256sum out/cloud_redirect-x86_64.so
 
       # Title and notes from the tag (v<version>-linux64.<build>), the commit and
       # the previous tag. A title or notes already written by hand are kept.
@@ -141,10 +142,10 @@ jobs:
             gh release create "$TAG" --title "$TAG" --notes "$notes"; echo "release created"
           fi
 
-      - name: Attach the assets
+      - name: Attach the asset
         if: ${{ env.DO_BUILD == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "$TAG" --clobber out/cloud_redirect-x86_64.so out/cloud_redirect_cli-x86_64 out/SHA256SUMS
+          gh release upload "$TAG" --clobber out/cloud_redirect-x86_64.so
           gh release view "$TAG" --json assets --jq '.assets[] | "  \(.name) \(.size) bytes"'
