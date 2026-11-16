@@ -28,6 +28,7 @@ const char* CR_GetVersion() { return CR_VERSION_STRING; }
 #include <execinfo.h>
 #include <cstring>
 #include <cstdio>
+#include <cstdlib>
 #include <atomic>
 #include <string>
 #include <cstdint>
@@ -628,6 +629,15 @@ static void OnLoad()
     std::string proc = GetProcessName();
     if (proc != "steam" && !SteamclientMapped())
         return;
+
+#if defined(__x86_64__)
+    // The steamrt64 bootstrapper is also called `steam` but never maps
+    // steamclient.so: it re-launches itself inside the runtime container with
+    // STEAM_STEAMRT_RECURSION_GUARD set and then only waits. Cleaning
+    // LD_PRELOAD here would keep that inner client from ever loading us.
+    if (getenv("STEAM_STEAMRT_RECURSION_GUARD") == nullptr && !SteamclientMapped())
+        return;
+#endif
 
     // Clean ourselves from LD_PRELOAD so child processes don't inherit us
     CleanLdPreload();

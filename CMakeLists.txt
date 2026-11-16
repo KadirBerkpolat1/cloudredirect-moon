@@ -250,6 +250,11 @@ if(NOT WIN32)
         target_link_options(provider_config_tests PRIVATE -m32)
     endif()
     add_test(NAME provider_config_tests COMMAND provider_config_tests)
+    if(NOT LINUX_32BIT)
+        add_test(NAME linux_bootstrapper_gate_test
+            COMMAND bash ${CMAKE_SOURCE_DIR}/test/linux_bootstrapper_gate_test.sh
+                         $<TARGET_FILE:cloud_redirect>)
+    endif()
 endif()
 
 if(NOT WIN32)
