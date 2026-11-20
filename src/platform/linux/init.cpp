@@ -41,6 +41,7 @@ static std::atomic<bool> g_hookAttempted{false};
 static std::atomic<bool> g_logInitialized{false};
 static pthread_t g_initThread{};
 static std::atomic<bool> g_initThreadDone{false};
+static std::atomic<bool> g_initThreadCreated{false};
 // Set by OnUnload so a DeferredInitThread still waiting for steamclient.so (a
 // 64-bit launcher-stage process that exits) stops at its next poll and the
 // pthread_join in OnUnload returns at once instead of after the poll cap.

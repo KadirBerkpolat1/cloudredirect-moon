@@ -139,20 +139,6 @@ static std::string JsonSuccess() {
     return JsonObject({{"success", JsonBool(true)}});
 }
 
-static bool ListProviderSubfolders(ICloudProvider* provider,
-                                   const std::string& providerName,
-                                   const std::string& prefix,
-                                   std::vector<std::string>& folders) {
-    // Drive providers have optimized shallow implementations. Keep those for
-    // the CLI scan; their recursive ListChecked path is intentionally heavier.
-    if (providerName == "gdrive" || providerName == "onedrive") {
-        folders = provider->ListSubfolders(prefix);
-        return true;
-    }
-    bool complete = false;
-    return provider->ListSubfoldersChecked(prefix, folders, &complete) && complete;
-}
-
 std::string CmdAuthStatus(const std::string& provider) {
     std::string tokenPath = GetTokenPath(provider);
     if (tokenPath.empty()) {
