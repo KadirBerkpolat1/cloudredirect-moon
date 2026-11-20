@@ -203,9 +203,9 @@ std::string CmdListRemoteApps(const std::string& provider, const std::string& ac
     // List app folders first, then per-app stats (avoids heavy recursive listing).
     std::string prefix = accountId + "/";
     std::vector<std::string> appIds;
-    if (!ListProviderSubfolders(prov.get(), provider, prefix, appIds)) {
+    if (!prov->ListSubfoldersChecked(prefix, appIds)) {
         prov->Shutdown();
-        return JsonError("Failed to list remote apps");
+        return JsonError("Failed to list apps for account " + accountId);
     }
     std::map<std::string, std::pair<int, uint64_t>> appStats; // appId -> (count, totalSize)
     for (const auto& appId : appIds) {
@@ -268,9 +268,9 @@ std::string CmdListRemoteAppIds(const std::string& provider, const std::string& 
     
     std::string prefix = accountId + "/";
     std::vector<std::string> folders;
-    if (!ListProviderSubfolders(prov.get(), provider, prefix, folders)) {
+    if (!prov->ListSubfoldersChecked(prefix, folders)) {
         prov->Shutdown();
-        return JsonError("Failed to list remote app IDs");
+        return JsonError("Failed to list apps for account " + accountId);
     }
     prov->Shutdown();
     
@@ -1035,9 +1035,9 @@ std::string CmdScanAll(const std::string& provider) {
     bool firstApp = true;
     for (const auto& acct : accountIds) {
         std::vector<std::string> appIds;
-        if (!ListProviderSubfolders(prov.get(), provider, acct + "/", appIds)) {
+        if (!prov->ListSubfoldersChecked(acct + "/", appIds)) {
             prov->Shutdown();
-            return JsonError("Failed to list remote apps for account " + acct);
+            return JsonError("Failed to list apps for account " + acct);
         }
         for (const auto& appId : appIds) {
             if (appId.empty() || appId == "0") continue;
@@ -1473,6 +1473,9 @@ extern "C"
 __declspec(dllexport)
 #endif
 int CloudRedirect_CliMain(int argc, char** argv) {
+#ifndef _WIN32
+    Log::Init();
+#endif
     if (CloudRedirectCli::IsCliMode(argc, argv)) {
         return CloudRedirectCli::RunCli(argc, argv);
     }

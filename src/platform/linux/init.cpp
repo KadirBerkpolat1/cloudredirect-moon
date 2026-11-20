@@ -40,7 +40,11 @@ static std::atomic<bool> g_initialized{false};
 static std::atomic<bool> g_hookAttempted{false};
 static std::atomic<bool> g_logInitialized{false};
 static pthread_t g_initThread{};
-static std::atomic<bool> g_initThreadCreated{false};
+static std::atomic<bool> g_initThreadDone{false};
+// Set by OnUnload so a DeferredInitThread still waiting for steamclient.so (a
+// 64-bit launcher-stage process that exits) stops at its next poll and the
+// pthread_join in OnUnload returns at once instead of after the poll cap.
+static std::atomic<bool> g_unloading{false};
 
 // Raw diagnostic logging (survives even if C++ runtime is broken)
 
@@ -609,19 +613,44 @@ static void* DeferredInitThread(void*)
     // before steamclient appears (bootstrapper/updater, -shutdown, handover)
     // cancels the remaining window instead of holding OnUnload's join open.
     DebugLog("[CR] DeferredInit: waiting for steamclient.so\n");
-    const auto outcome = LinuxInitStop::PollUntilReady(
-        LinuxInitStop::ProcessStop(), 240, std::chrono::milliseconds(500),
-        SteamclientMapped);  // 240 x 500ms = up to 120 seconds
-    if (outcome == LinuxInitStop::PollOutcome::Stopped) {
-        DebugLog("[CR] DeferredInit: stopped early, process is exiting before steamclient.so mapped\n");
-        Log::Info("Init stopped early: process exiting before steamclient.so mapped");
+#if defined(__x86_64__)
+    // 64-bit client: the same poll, with lumalinux's cap instead of the
+    // original's 10 s (its liblumalinux, preloaded into the same process, waits
+    // up to 5 minutes for steamclient.so: main.cpp, kMaxAttempts = 300 x 1 s).
+    // The client inside the runtime container can take well over 10 s to map
+    // steamclient.so (a SteamOS codespace: ~40 s; 2026-11-16, two boots out of
+    // three left this library passive). The cap only bounds the launcher-stage
+    // processes, which never map it; the client is picked up as soon as it does.
+    constexpr int kMaxPolls = 600;  // 600 x 0.5 s = 5 minutes
+#else
+    constexpr int kMaxPolls = 20;   // up to 10 seconds (unchanged)
+#endif
+    int polls = 0;
+    for (; polls < kMaxPolls; polls++) {
+        if (SteamclientMapped()) break;
+        if (g_unloading.load(std::memory_order_acquire)) {
+            // The process is going away while we wait: a launcher stage exiting.
+            g_initThreadDone.store(true, std::memory_order_release);
+            return nullptr;
+        }
+        usleep(500000);
+    }
+#if defined(__x86_64__)
+    if (!SteamclientMapped()) {
+        // Launcher-stage process (see OnLoad): no steamclient.so here, the client
+        // is a child that inherits LD_PRELOAD. Stay passive, no error, no notify.
+        DebugLog("[CR] DeferredInit: no steamclient.so in this process, launcher stage; staying passive\n");
+        Log::Info("steamclient.so not mapped in this process after %d s (pid=%d): launcher stage, staying passive",
+                  kMaxPolls / 2, getpid());
+        g_initThreadDone.store(true, std::memory_order_release);
         return nullptr;
     }
-    if (outcome != LinuxInitStop::PollOutcome::Ready) {
-        DebugLog("[CR] DeferredInit: steamclient.so never mapped within window, aborting\n");
-        Log::Error("Init aborted: steamclient.so not mapped within wait window");
-        return nullptr;
-    }
+    Log::Info("steamclient.so mapped after %.1f s (pid=%d)", polls * 0.5, getpid());
+    // This is the client: drop ourselves from LD_PRELOAD now, so its children
+    // (steamwebhelper, games) do not inherit the .so -- what the 32-bit build
+    // does at load time.
+    CleanLdPreload();
+#endif
     DebugLog("[CR] DeferredInit: starting\n");
 
     // Install crash guard so a bad memory read aborts correctly
@@ -662,17 +691,18 @@ static void OnLoad()
     if (proc != "steam" && !SteamclientMapped())
         return;
 
-#if defined(__x86_64__)
-    // The steamrt64 bootstrapper is also called `steam` but never maps
-    // steamclient.so: it re-launches itself inside the runtime container with
-    // STEAM_STEAMRT_RECURSION_GUARD set and then only waits. Cleaning
-    // LD_PRELOAD here would keep that inner client from ever loading us.
-    if (getenv("STEAM_STEAMRT_RECURSION_GUARD") == nullptr && !SteamclientMapped())
-        return;
-#endif
-
-    // Clean ourselves from LD_PRELOAD so child processes don't inherit us
+#if !defined(__x86_64__)
+    // Clean ourselves from LD_PRELOAD so child processes don't inherit us.
+    // (32-bit client: this process is the client itself.)
     CleanLdPreload();
+#else
+    // 64-bit client: the launcher chain (steamrt64/steam updater stage,
+    // pressure-vessel) is all named "steam" too, and the real client runs as a
+    // child inside the runtime container. Stripping LD_PRELOAD here would stop
+    // that child from inheriting us (run 103: loaded in the launcher, never in
+    // the client). The strip moves to DeferredInitThread, once steamclient.so
+    // is mapped, i.e. in the client, before its own children start.
+#endif
 
     EnsureLogInit();
     DebugLog("[CR] OnLoad: target process (steam), spawning deferred init thread\n");
@@ -694,6 +724,10 @@ static void OnUnload()
 {
     DebugLog("[CR] OnUnload: shutting down\n");
 
+    // Wait for the init thread to finish so we don't unmap code it's executing.
+    // Bounded: a thread still polling for steamclient.so sees g_unloading at
+    // its next 0.5 s tick and returns; otherwise it is in DoInit, which ends.
+    g_unloading.store(true, std::memory_order_release);
     if (g_hookAttempted.load(std::memory_order_acquire)) {
         // Tell the init thread's wait loops to give up before joining it: the
         // attach poll alone runs up to 120s, so an unsignalled join would keep
