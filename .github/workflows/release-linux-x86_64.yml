@@ -24,11 +24,16 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to work on"
+        description: "Existing tag to work on (empty with test_build: build the branch the workflow runs on)"
         type: string
-        required: true
+        required: false
+        default: ""
       rebuild:
         description: "Rebuild and re-upload the .so (replaces it). Off = only set the release title/notes"
+        type: boolean
+        default: false
+      test_build:
+        description: "Build the .so from the selected branch and keep it as a workflow artifact only: no release is touched (a build to try on one machine before a tag)"
         type: boolean
         default: false
 
@@ -40,7 +45,8 @@ env:
   CURL_VER: 8.11.1
   BUILD_IMAGE: ubuntu:22.04
   TAG: ${{ inputs.tag || github.ref_name }}
-  DO_BUILD: ${{ github.event_name == 'push' || inputs.rebuild == true }}
+  DO_BUILD: ${{ github.event_name == 'push' || inputs.rebuild == true || inputs.test_build == true }}
+  TEST_BUILD: ${{ inputs.test_build == true }}
 
 jobs:
   build:
@@ -116,11 +122,20 @@ jobs:
           cp build64/cloud_redirect.so out/cloud_redirect-x86_64.so && chmod 644 out/cloud_redirect-x86_64.so
           sha256sum out/cloud_redirect-x86_64.so
 
+      - name: Keep the test build as an artifact (no release)
+        if: ${{ env.TEST_BUILD == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloud_redirect-x86_64-${{ github.ref_name }}-${{ github.sha }}
+          path: out/cloud_redirect-x86_64.so
+          retention-days: 14
+
       # Title and notes from the tag (v<version>-linux64.<build>), the commit and
       # the previous tag. A title or notes already written by hand are kept.
       # Title = the tag, notes = the changelog line only (release notes live on
       # Discord). A tag push fills them when empty; a manual run writes them.
       - name: Release title and notes
+        if: ${{ env.TEST_BUILD != 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
@@ -143,7 +158,7 @@ jobs:
           fi
 
       - name: Attach the asset
-        if: ${{ env.DO_BUILD == 'true' }}
+        if: ${{ env.DO_BUILD == 'true' && env.TEST_BUILD != 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
